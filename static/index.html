@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Realtime Voice Task Manager</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5efe5;
+        --panel: #fffaf3;
+        --accent: #17624d;
+        --accent-soft: #d7efe6;
+        --text: #1d2a25;
+        --muted: #62716a;
+        --border: #d6d0c7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background:
+          radial-gradient(circle at top left, #fff6cf 0, transparent 25%),
+          radial-gradient(circle at bottom right, #dfeee4 0, transparent 30%),
+          var(--bg);
+        color: var(--text);
+      }
+
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 32px 20px 40px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(2rem, 3vw, 3rem);
+        line-height: 1;
+      }
+
+      .lead {
+        margin: 0 0 24px;
+        color: var(--muted);
+        max-width: 60ch;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 20px;
+      }
+
+      .panel {
+        background: color-mix(in srgb, var(--panel) 92%, white 8%);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 18px;
+        box-shadow: 0 16px 40px rgba(29, 42, 37, 0.08);
+      }
+
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      button,
+      select,
+      input {
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 12px 16px;
+        font: inherit;
+      }
+
+      button {
+        background: white;
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        background: #a1462a;
+      }
+
+      .status-dot.live {
+        background: #2e9a56;
+      }
+
+      .conversation,
+      .tasks,
+      .events {
+        min-height: 320px;
+        max-height: 440px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .bubble {
+        padding: 12px 14px;
+        border-radius: 16px;
+        line-height: 1.4;
+      }
+
+      .bubble.user {
+        background: white;
+        align-self: flex-end;
+      }
+
+      .bubble.assistant {
+        background: var(--accent-soft);
+        align-self: flex-start;
+      }
+
+      .meta {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .task {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: white;
+      }
+
+      .toolbar {
+        margin-bottom: 16px;
+      }
+
+      .text-entry {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .text-entry input {
+        flex: 1;
+      }
+
+      @media (max-width: 860px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Realtime voice task assistant</h1>
+      <p class="lead">
+        This version uses Gemini Live for low-latency conversation. Click start, allow microphone access, and speak naturally.
+      </p>
+
+      <div class="grid">
+        <section class="panel">
+          <div class="toolbar row">
+            <span class="meta"><span id="statusDot" class="status-dot"></span><span id="statusText">Disconnected</span></span>
+            <select id="voiceSelect">
+              <option>Kore</option>
+              <option>Puck</option>
+              <option>Aoede</option>
+              <option>Charon</option>
+              <option>Fenrir</option>
+              <option>Leda</option>
+              <option>Orus</option>
+              <option>Zephyr</option>
+            </select>
+            <button id="connectBtn" class="primary">Start conversation</button>
+            <button id="disconnectBtn" disabled>Stop</button>
+          </div>
+
+          <div id="conversation" class="conversation"></div>
+
+          <div class="text-entry">
+            <input id="textInput" type="text" placeholder="Type if you prefer">
+            <button id="sendTextBtn">Send</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Task state</h2>
+          <div id="tasks" class="tasks"></div>
+
+          <h2>Live events</h2>
+          <div id="events" class="events"></div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const connectBtn = document.getElementById("connectBtn");
+      const disconnectBtn = document.getElementById("disconnectBtn");
+      const sendTextBtn = document.getElementById("sendTextBtn");
+      const textInput = document.getElementById("textInput");
+      const voiceSelect = document.getElementById("voiceSelect");
+      const statusDot = document.getElementById("statusDot");
+      const statusText = document.getElementById("statusText");
+      const conversation = document.getElementById("conversation");
+      const tasks = document.getElementById("tasks");
+      const events = document.getElementById("events");
+
+      let socket = null;
+      let audioContext = null;
+      let playbackContext = null;
+      let mediaStream = null;
+      let mediaSource = null;
+      let processor = null;
+      let playbackCursor = 0;
+      let partialUserTranscript = "";
+      let partialAssistantTranscript = "";
+      let speaking = false;
+      let silenceFrames = 0;
+      const SPEECH_THRESHOLD = 0.015;
+      const SILENCE_FRAME_LIMIT = 10;
+
+      function setStatus(text, connected) {
+        statusText.textContent = text;
+        statusDot.classList.toggle("live", connected);
+      }
+
+      function addBubble(role, text) {
+        const node = document.createElement("div");
+        node.className = `bubble ${role}`;
+        node.textContent = text;
+        conversation.appendChild(node);
+        conversation.scrollTop = conversation.scrollHeight;
+      }
+
+      function addEvent(text) {
+        const node = document.createElement("div");
+        node.className = "meta";
+        node.textContent = text;
+        events.appendChild(node);
+        events.scrollTop = events.scrollHeight;
+      }
+
+      function renderTasks(toolResult) {
+        if (toolResult.name === "list_tasks") {
+          tasks.innerHTML = "";
+          const list = toolResult.result.tasks || [];
+          if (!list.length) {
+            const empty = document.createElement("div");
+            empty.className = "task";
+            empty.textContent = "No open tasks.";
+            tasks.appendChild(empty);
+          }
+          for (const task of list) {
+            const card = document.createElement("div");
+            card.className = "task";
+            card.textContent = `${task.id}. ${task.title} (${task.status})`;
+            tasks.appendChild(card);
+          }
+        }
+
+        if (["add_task", "complete_task", "delete_task", "clear_completed"].includes(toolResult.name)) {
+          const card = document.createElement("div");
+          card.className = "task";
+          card.textContent = `${toolResult.name}: ${JSON.stringify(toolResult.result)}`;
+          tasks.prepend(card);
+        }
+      }
+
+      function decodeBase64ToInt16(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return new Int16Array(bytes.buffer);
+      }
+
+      function playPcm16(base64, sampleRate = 24000) {
+        if (!playbackContext) {
+          playbackContext = new AudioContext();
+          playbackCursor = playbackContext.currentTime;
+        }
+
+        const pcm = decodeBase64ToInt16(base64);
+        const audioBuffer = playbackContext.createBuffer(1, pcm.length, sampleRate);
+        const channel = audioBuffer.getChannelData(0);
+        for (let i = 0; i < pcm.length; i += 1) {
+          channel[i] = pcm[i] / 32768;
+        }
+
+        const source = playbackContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(playbackContext.destination);
+        const startAt = Math.max(playbackContext.currentTime, playbackCursor);
+        source.start(startAt);
+        playbackCursor = startAt + audioBuffer.duration;
+      }
+
+      function floatTo16BitPCM(input) {
+        const output = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i += 1) {
+          const value = Math.max(-1, Math.min(1, input[i]));
+          output[i] = value < 0 ? value * 32768 : value * 32767;
+        }
+        return output;
+      }
+
+      function downsampleBuffer(buffer, inputRate, outputRate) {
+        if (inputRate === outputRate) {
+          return buffer;
+        }
+        const ratio = inputRate / outputRate;
+        const newLength = Math.round(buffer.length / ratio);
+        const result = new Float32Array(newLength);
+        let offsetResult = 0;
+        let offsetBuffer = 0;
+
+        while (offsetResult < result.length) {
+          const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+          let accum = 0;
+          let count = 0;
+          for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i += 1) {
+            accum += buffer[i];
+            count += 1;
+          }
+          result[offsetResult] = accum / count;
+          offsetResult += 1;
+          offsetBuffer = nextOffsetBuffer;
+        }
+        return result;
+      }
+
+      function int16ToBase64(int16) {
+        const bytes = new Uint8Array(int16.buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i += 1) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+      }
+
+      async function startMicrophone() {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext();
+        mediaSource = audioContext.createMediaStreamSource(mediaStream);
+        processor = audioContext.createScriptProcessor(2048, 1, 1);
+
+        processor.onaudioprocess = (event) => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          const input = event.inputBuffer.getChannelData(0);
+          let peak = 0;
+          for (let i = 0; i < input.length; i += 1) {
+            const absolute = Math.abs(input[i]);
+            if (absolute > peak) {
+              peak = absolute;
+            }
+          }
+
+          if (peak > SPEECH_THRESHOLD) {
+            silenceFrames = 0;
+            if (!speaking) {
+              speaking = true;
+              socket.send(JSON.stringify({ type: "activity_start" }));
+              addEvent("Speech detected.");
+            }
+          } else if (speaking) {
+            silenceFrames += 1;
+            if (silenceFrames >= SILENCE_FRAME_LIMIT) {
+              speaking = false;
+              silenceFrames = 0;
+              socket.send(JSON.stringify({ type: "activity_end" }));
+              addEvent("Speech segment ended.");
+            }
+          }
+
+          const downsampled = downsampleBuffer(input, audioContext.sampleRate, 16000);
+          const pcm16 = floatTo16BitPCM(downsampled);
+          socket.send(JSON.stringify({ type: "audio", data: int16ToBase64(pcm16) }));
+        };
+
+        mediaSource.connect(processor);
+        processor.connect(audioContext.destination);
+      }
+
+      function stopMicrophone() {
+        speaking = false;
+        silenceFrames = 0;
+        if (processor) {
+          processor.disconnect();
+          processor = null;
+        }
+        if (mediaSource) {
+          mediaSource.disconnect();
+          mediaSource = null;
+        }
+        if (mediaStream) {
+          for (const track of mediaStream.getTracks()) {
+            track.stop();
+          }
+          mediaStream = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+        }
+      }
+
+      async function connect() {
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${protocol}://${window.location.host}/ws/live`);
+        setStatus("Connecting…", false);
+
+        socket.onopen = async () => {
+          socket.send(JSON.stringify({ type: "config", voice: voiceSelect.value }));
+          await startMicrophone();
+          setStatus("Listening", true);
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+          addEvent("Microphone streaming started.");
+        };
+
+        socket.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "input_transcript") {
+            partialUserTranscript = payload.text;
+            if (payload.finished) {
+              addBubble("user", payload.text);
+              partialUserTranscript = "";
+            }
+          } else if (payload.type === "output_transcript") {
+            partialAssistantTranscript = payload.text;
+            if (payload.finished) {
+              addBubble("assistant", payload.text);
+              partialAssistantTranscript = "";
+            }
+          } else if (payload.type === "assistant_text") {
+            addEvent(`Assistant text: ${payload.text}`);
+          } else if (payload.type === "tool_result") {
+            addEvent(`Tool ${payload.name}: ${JSON.stringify(payload.result)}`);
+            renderTasks(payload);
+          } else if (payload.type === "audio") {
+            playPcm16(payload.data);
+          } else if (payload.type === "turn_complete") {
+            addEvent("Turn complete.");
+          } else if (payload.type === "error") {
+            addEvent(`Error: ${payload.message}`);
+          }
+        };
+
+        socket.onerror = (event) => {
+          console.error("WebSocket error", event);
+          addEvent("WebSocket error. Check the browser console and server terminal.");
+        };
+
+        socket.onclose = (event) => {
+          stopMicrophone();
+          setStatus("Disconnected", false);
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          addEvent(`Conversation stopped. Code=${event.code} Reason=${event.reason || "none"}`);
+        };
+      }
+
+      function disconnect() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "audio_end" }));
+          socket.close();
+        }
+      }
+
+      connectBtn.addEventListener("click", connect);
+      disconnectBtn.addEventListener("click", disconnect);
+      sendTextBtn.addEventListener("click", () => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        const text = textInput.value.trim();
+        if (!text) {
+          return;
+        }
+        addBubble("user", text);
+        socket.send(JSON.stringify({ type: "text", text }));
+        textInput.value = "";
+      });
+      textInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          sendTextBtn.click();
+        }
+      });
+    </script>
+  </body>
+</html>
