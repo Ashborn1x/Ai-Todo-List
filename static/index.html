@@ -42,6 +42,11 @@
         line-height: 1;
       }
 
+      h2 {
+        margin: 0 0 12px;
+        font-size: 1.1rem;
+      }
+
       .lead {
         margin: 0 0 24px;
         color: var(--muted);
@@ -89,7 +94,9 @@
         color: white;
       }
 
-      button:disabled {
+      button:disabled,
+      select:disabled,
+      input:disabled {
         cursor: not-allowed;
         opacity: 0.6;
       }
@@ -160,6 +167,10 @@
         flex: 1;
       }
 
+      a {
+        color: var(--accent);
+      }
+
       @media (max-width: 860px) {
         .grid {
           grid-template-columns: 1fr;
@@ -195,8 +206,8 @@
           <div id="conversation" class="conversation"></div>
 
           <div class="text-entry">
-            <input id="textInput" type="text" placeholder="Type if you prefer">
-            <button id="sendTextBtn">Send</button>
+            <input id="textInput" type="text" placeholder="Type if you prefer" disabled>
+            <button id="sendTextBtn" disabled>Send</button>
           </div>
         </section>
 
@@ -229,16 +240,30 @@
       let mediaSource = null;
       let processor = null;
       let playbackCursor = 0;
-      let partialUserTranscript = "";
-      let partialAssistantTranscript = "";
       let speaking = false;
       let silenceFrames = 0;
-      const SPEECH_THRESHOLD = 0.015;
-      const SILENCE_FRAME_LIMIT = 10;
+      let speechFrames = 0;
+      let disconnecting = false;
+      let noiseFloor = 0.003;
+      let calibratedFrames = 0;
+      const CALIBRATION_FRAMES = 12;
+      const MIN_NOISE_FLOOR = 0.0025;
+      const SPEECH_RATIO = 2.0;
+      const MIN_SPEECH_RMS = 0.008;
+      const REQUIRED_SPEECH_FRAMES = 2;
+      const SILENCE_FRAME_LIMIT = 14;
 
       function setStatus(text, connected) {
         statusText.textContent = text;
         statusDot.classList.toggle("live", connected);
+      }
+
+      function setConnectionButtons({ connecting = false, connected = false, stopping = false } = {}) {
+        connectBtn.disabled = connecting || connected || stopping;
+        disconnectBtn.disabled = !connected && !stopping;
+        voiceSelect.disabled = connecting || connected || stopping;
+        sendTextBtn.disabled = !connected || stopping;
+        textInput.disabled = !connected || stopping;
       }
 
       function addBubble(role, text) {
@@ -258,6 +283,30 @@
       }
 
       function renderTasks(toolResult) {
+        if (toolResult.name === "search_web") {
+          tasks.innerHTML = "";
+          const results = toolResult.result.results || [];
+          if (!results.length) {
+            const empty = document.createElement("div");
+            empty.className = "task";
+            empty.textContent = toolResult.result.message || "No web results.";
+            tasks.appendChild(empty);
+            return;
+          }
+          for (const item of results) {
+            const card = document.createElement("div");
+            card.className = "task";
+            card.innerHTML = `
+              <strong>${item.title}</strong><br>
+              <span class="meta">${item.source}</span><br>
+              <div>${item.snippet}</div>
+              <div><a href="${item.url}" target="_blank" rel="noreferrer">${item.url}</a></div>
+            `;
+            tasks.appendChild(card);
+          }
+          return;
+        }
+
         if (toolResult.name === "list_tasks") {
           tasks.innerHTML = "";
           const list = toolResult.result.tasks || [];
@@ -273,6 +322,7 @@
             card.textContent = `${task.id}. ${task.title} (${task.status})`;
             tasks.appendChild(card);
           }
+          return;
         }
 
         if (["add_task", "complete_task", "delete_task", "clear_completed"].includes(toolResult.name)) {
@@ -356,39 +406,63 @@
         return btoa(binary);
       }
 
+      function calculateRms(samples) {
+        let sumSquares = 0;
+        for (let i = 0; i < samples.length; i += 1) {
+          sumSquares += samples[i] * samples[i];
+        }
+        return Math.sqrt(sumSquares / samples.length);
+      }
+
       async function startMicrophone() {
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioContext = new AudioContext();
         mediaSource = audioContext.createMediaStreamSource(mediaStream);
         processor = audioContext.createScriptProcessor(2048, 1, 1);
+        calibratedFrames = 0;
+        noiseFloor = MIN_NOISE_FLOOR;
+        speechFrames = 0;
+        silenceFrames = 0;
+        speaking = false;
 
         processor.onaudioprocess = (event) => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) {
+          if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
             return;
           }
+
           const input = event.inputBuffer.getChannelData(0);
-          let peak = 0;
-          for (let i = 0; i < input.length; i += 1) {
-            const absolute = Math.abs(input[i]);
-            if (absolute > peak) {
-              peak = absolute;
+          const rms = calculateRms(input);
+
+          if (!speaking) {
+            if (calibratedFrames < CALIBRATION_FRAMES) {
+              noiseFloor = Math.max(MIN_NOISE_FLOOR, (noiseFloor * calibratedFrames + rms) / (calibratedFrames + 1));
+              calibratedFrames += 1;
+            } else {
+              noiseFloor = Math.max(MIN_NOISE_FLOOR, noiseFloor * 0.98 + rms * 0.02);
             }
           }
 
-          if (peak > SPEECH_THRESHOLD) {
+          const dynamicThreshold = Math.max(MIN_SPEECH_RMS, noiseFloor * SPEECH_RATIO);
+          const speechDetected = rms >= dynamicThreshold;
+
+          if (speechDetected) {
             silenceFrames = 0;
-            if (!speaking) {
+            speechFrames += 1;
+            if (!speaking && speechFrames >= REQUIRED_SPEECH_FRAMES) {
               speaking = true;
               socket.send(JSON.stringify({ type: "activity_start" }));
               addEvent("Speech detected.");
             }
-          } else if (speaking) {
-            silenceFrames += 1;
-            if (silenceFrames >= SILENCE_FRAME_LIMIT) {
-              speaking = false;
-              silenceFrames = 0;
-              socket.send(JSON.stringify({ type: "activity_end" }));
-              addEvent("Speech segment ended.");
+          } else {
+            speechFrames = 0;
+            if (speaking) {
+              silenceFrames += 1;
+              if (silenceFrames >= SILENCE_FRAME_LIMIT) {
+                speaking = false;
+                silenceFrames = 0;
+                socket.send(JSON.stringify({ type: "activity_end" }));
+                addEvent("Speech segment ended.");
+              }
             }
           }
 
@@ -404,6 +478,8 @@
       function stopMicrophone() {
         speaking = false;
         silenceFrames = 0;
+        speechFrames = 0;
+        calibratedFrames = 0;
         if (processor) {
           processor.disconnect();
           processor = null;
@@ -424,33 +500,48 @@
         }
       }
 
+      function stopPlayback() {
+        playbackCursor = 0;
+        if (playbackContext && playbackContext.state !== "closed") {
+          playbackContext.close();
+        }
+        playbackContext = null;
+      }
+
+      function finalizeDisconnect(message) {
+        stopMicrophone();
+        stopPlayback();
+        socket = null;
+        disconnecting = false;
+        setStatus("Disconnected", false);
+        setConnectionButtons({ connected: false });
+        addEvent(message);
+      }
+
       async function connect() {
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        disconnecting = false;
         socket = new WebSocket(`${protocol}://${window.location.host}/ws/live`);
-        setStatus("Connecting…", false);
+        setStatus("Connecting...", false);
+        setConnectionButtons({ connecting: true });
 
         socket.onopen = async () => {
           socket.send(JSON.stringify({ type: "config", voice: voiceSelect.value }));
           await startMicrophone();
           setStatus("Listening", true);
-          connectBtn.disabled = true;
-          disconnectBtn.disabled = false;
+          setConnectionButtons({ connected: true });
           addEvent("Microphone streaming started.");
         };
 
         socket.onmessage = (event) => {
           const payload = JSON.parse(event.data);
           if (payload.type === "input_transcript") {
-            partialUserTranscript = payload.text;
-            if (payload.finished) {
+            if (payload.finished && payload.text) {
               addBubble("user", payload.text);
-              partialUserTranscript = "";
             }
           } else if (payload.type === "output_transcript") {
-            partialAssistantTranscript = payload.text;
-            if (payload.finished) {
+            if (payload.finished && payload.text) {
               addBubble("assistant", payload.text);
-              partialAssistantTranscript = "";
             }
           } else if (payload.type === "assistant_text") {
             addEvent(`Assistant text: ${payload.text}`);
@@ -472,31 +563,60 @@
         };
 
         socket.onclose = (event) => {
-          stopMicrophone();
-          setStatus("Disconnected", false);
-          connectBtn.disabled = false;
-          disconnectBtn.disabled = true;
-          addEvent(`Conversation stopped. Code=${event.code} Reason=${event.reason || "none"}`);
+          finalizeDisconnect(`Conversation stopped. Code=${event.code} Reason=${event.reason || "none"}`);
         };
       }
 
       function disconnect() {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "audio_end" }));
-          socket.close();
+        if (disconnecting) {
+          return;
         }
+
+        disconnecting = true;
+        setStatus("Stopping...", false);
+        setConnectionButtons({ stopping: true });
+        stopMicrophone();
+
+        if (!socket) {
+          finalizeDisconnect("Conversation stopped locally.");
+          return;
+        }
+
+        if (socket.readyState === WebSocket.OPEN) {
+          try {
+            socket.send(JSON.stringify({ type: "audio_end" }));
+          } catch (error) {
+            console.error("Failed to send audio_end", error);
+          }
+
+          window.setTimeout(() => {
+            if (socket && socket.readyState !== WebSocket.CLOSED) {
+              socket.close(1000, "Stopped by user");
+            }
+          }, 50);
+          return;
+        }
+
+        if (socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000, "Stopped during connect");
+          return;
+        }
+
+        finalizeDisconnect("Conversation stopped locally.");
       }
 
       connectBtn.addEventListener("click", connect);
       disconnectBtn.addEventListener("click", disconnect);
       sendTextBtn.addEventListener("click", () => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
+        if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
           return;
         }
+
         const text = textInput.value.trim();
         if (!text) {
           return;
         }
+
         addBubble("user", text);
         socket.send(JSON.stringify({ type: "text", text }));
         textInput.value = "";

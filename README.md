@@ -53,6 +53,19 @@ This realtime mode:
 - streams microphone audio continuously
 - plays assistant audio back automatically
 - exposes local task tools so the voice assistant can add, list, complete, and delete tasks
+- falls back to web search for questions that are not answered by local task data
+
+## What this app is now
+
+This can run as a local assistant on your machine:
+
+- local browser UI
+- local Python server
+- local task storage in `tasks.json`
+- Gemini API for voice and reasoning
+- web search fallback for missing/current information
+
+You do not need to host it publicly. It runs on `localhost`.
 
 ## Example Commands
 
