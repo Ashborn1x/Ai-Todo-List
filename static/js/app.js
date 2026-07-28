@@ -471,8 +471,28 @@ async function connect() {
 
   socket.onopen = async () => {
     socket.send(JSON.stringify({ type: "config", voice: voiceSelect.value }));
-    await startMicrophone();
     setConnectionButtons({ connected: true });
+    setStatus("Allow microphone access...", true);
+    addEvent(events, "Connected. Waiting for microphone permission.");
+
+    try {
+      await startMicrophone();
+    } catch (error) {
+      addEvent(events, `Microphone unavailable: ${error.message}`);
+      const failedSocket = socket;
+      if (failedSocket) {
+        failedSocket.onclose = null;
+      }
+      finalizeDisconnect("Conversation stopped because the microphone is unavailable.");
+      if (
+        failedSocket &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(failedSocket.readyState)
+      ) {
+        failedSocket.close(1008, "Microphone permission required");
+      }
+      return;
+    }
+
     addEvent(events, "Microphone streaming started.");
     updateLiveState();
   };
