@@ -1,82 +1,72 @@
 # Voice-Controlled Task Manager
 
-This project is a Streamlit task manager that supports:
-
-- typed commands like `add task buy milk`
-- voice commands using Gemini audio understanding
-- spoken confirmations using Gemini text-to-speech
-- persistent local storage in `tasks.json`
+A local Gemini Live assistant with realtime voice conversation, camera vision,
+task management, conversation context, and web-search fallback.
 
 ## Features
 
-- Add, list, complete, and delete tasks
-- Quick action form for manual task entry
-- Natural-language command parsing
-- Local task persistence without a database
-- Optional voice workflow when a Gemini API key is set
+- Realtime microphone input and spoken Gemini responses
+- Multi-turn conversation within one persistent Live API session
+- Optional camera input for object identification and scene questions
+- Local todo storage in `tasks.json`
+- Task tools for adding, listing, completing, and deleting items
+- Web search for current information
+- Typed input as an alternative to voice
+
+## Setup
+
+1. Install Python 3.11 or newer.
+2. Install dependencies:
+
+   ```powershell
+   python -m pip install -r requirements.txt
+   ```
+
+3. Add your Gemini key to `.env`:
+
+   ```dotenv
+   GEMINI_API_KEY=your-key-here
+   ```
 
 ## Run
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Start the app:
-   ```bash
-   streamlit run customer_support_voice_agent.py
-   ```
-
-3. In the sidebar, enter your Gemini API key if you want:
-   - voice transcription
-   - smarter natural-language parsing
-   - spoken audio responses
-
-## Realtime voice mode
-
-The Streamlit app is still push-to-talk. For low-latency voice conversation, use the separate realtime server:
-
-```bash
-set GEMINI_API_KEY=your-key-here
+```powershell
 python realtime_voice_server.py
 ```
 
-Then open:
+Open `http://127.0.0.1:8000`, click **Start conversation**, and allow
+microphone access. Camera access is separate and remains off until you click
+**Start camera**.
+
+## Project Structure
 
 ```text
-http://127.0.0.1:8000
+voice_task_manager/
+  app.py             FastAPI routes and static-file mounting
+  config.py          Paths, environment loading, and model settings
+  live_session.py    Gemini Live WebSocket and media transport
+  search_service.py  Web-search providers
+  task_service.py    Local task persistence and operations
+  tools.py           Gemini tool dispatch and session memory
+static/
+  css/styles.css     Application styling
+  js/app.js          Browser session and media orchestration
+  js/audio-utils.js  PCM conversion and audio utilities
+  js/ui.js           Safe DOM rendering
+  index.html         Page structure
+realtime_voice_server.py
+                     Compatibility launcher
 ```
 
-This realtime mode:
+## Data And Privacy
 
-- keeps a persistent Gemini Live session open
-- streams microphone audio continuously
-- plays assistant audio back automatically
-- exposes local task tools so the voice assistant can add, list, complete, and delete tasks
-- falls back to web search for questions that are not answered by local task data
+- The server runs locally on `127.0.0.1`.
+- Tasks stay in the local `tasks.json` file.
+- Microphone audio and camera frames are sent to Gemini while their respective
+  controls are active.
+- Camera frames are resized and sent once every two seconds.
+- Stopping the camera or conversation stops the browser media tracks.
 
-## What this app is now
-
-This can run as a local assistant on your machine:
-
-- local browser UI
-- local Python server
-- local task storage in `tasks.json`
-- Gemini API for voice and reasoning
-- web search fallback for missing/current information
-
-You do not need to host it publicly. It runs on `localhost`.
-
-## Example Commands
-
-- `add task prepare slides for monday`
-- `show tasks`
-- `complete task 1`
-- `delete task buy milk`
-- `clear completed`
-
-## Notes
-
-- Tasks are stored in `tasks.json` in the project folder.
-- If no Gemini API key is configured, the app still works with rule-based text commands.
-- Voice input depends on your installed Streamlit version supporting `st.audio_input`.
+The older `customer_support_voice_agent.py` Streamlit prototype remains in the
+repository for reference, but the FastAPI realtime application is the primary
+app.
