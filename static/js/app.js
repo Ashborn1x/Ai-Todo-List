@@ -5,7 +5,7 @@ import {
   floatTo16BitPCM,
   int16ToBase64
 } from "./audio-utils.js";
-import { addBubble, addEvent, renderToolResult } from "./ui.js";
+import { addBubble, addEvent, renderToolResult } from "./ui.js?v=5";
 
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
@@ -20,9 +20,17 @@ const cameraStatus = document.getElementById("cameraStatus");
 const cameraStage = document.getElementById("cameraStage");
 const cameraPreview = document.getElementById("cameraPreview");
 const cameraCanvas = document.getElementById("cameraCanvas");
+const orbStage = document.querySelector(".orb-stage");
 const conversation = document.getElementById("conversation");
 const tasks = document.getElementById("tasks");
 const events = document.getElementById("events");
+const viewTitle = document.getElementById("viewTitle");
+const navButtons = [...document.querySelectorAll("[data-nav]")];
+const viewPanels = [...document.querySelectorAll("[data-view]")];
+const newRequestButtons = [...document.querySelectorAll("[data-new-request]")];
+const refreshTasksBtn = document.getElementById("refreshTasksBtn");
+const countryInput = document.getElementById("countryInput");
+const localContext = document.getElementById("localContext");
 
 let socket = null;
 let audioContext = null;
@@ -56,10 +64,101 @@ const SILENCE_FRAME_LIMIT = 14;
 const PRE_SPEECH_CHUNKS = 6;
 const POST_SPEECH_CHUNKS = 4;
 const CAMERA_FRAME_INTERVAL_MS = 2000;
+const VIEW_TITLES = {
+  assistant: "Aura Assistant",
+  tasks: "Task Management",
+  history: "Interaction History",
+  settings: "Settings & Preferences"
+};
+
+function getBrowserDisplayContext() {
+  const locale = navigator.language || "en-US";
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  let region = "";
+
+  try {
+    region = new Intl.Locale(locale).region || "";
+  } catch {
+    region = "";
+  }
+
+  return {
+    timezone,
+    locale,
+    region,
+    country: countryInput.value.trim()
+  };
+}
+
+function getSessionUserContext() {
+  const context = getBrowserDisplayContext();
+  return {
+    region: context.region,
+    country: countryInput.value.trim(),
+    utc_offset_minutes: -new Date().getTimezoneOffset()
+  };
+}
+
+function initializeUserContext() {
+  const context = getBrowserDisplayContext();
+  let inferredCountry = context.region;
+
+  if (context.region && typeof Intl.DisplayNames === "function") {
+    try {
+      inferredCountry = new Intl.DisplayNames([context.locale], {
+        type: "region"
+      }).of(context.region);
+    } catch {
+      inferredCountry = context.region;
+    }
+  }
+
+  let savedCountry = "";
+  try {
+    savedCountry = window.localStorage.getItem("aura-country") || "";
+  } catch {
+    savedCountry = "";
+  }
+  countryInput.value = savedCountry || inferredCountry || "";
+  localContext.textContent =
+    `Timezone: ${context.timezone} · Locale: ${context.locale}`;
+}
+
+initializeUserContext();
+countryInput.addEventListener("change", () => {
+  try {
+    window.localStorage.setItem("aura-country", countryInput.value.trim());
+  } catch {
+    // Location context still works for this session when storage is unavailable.
+  }
+});
+
+function showView(viewName) {
+  const target = VIEW_TITLES[viewName] ? viewName : "assistant";
+  for (const panel of viewPanels) {
+    const active = panel.dataset.view === target;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  }
+  for (const button of navButtons) {
+    button.classList.toggle("active", button.dataset.nav === target);
+  }
+  viewTitle.textContent = VIEW_TITLES[target];
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
 function setStatus(text, connected) {
   statusText.textContent = text;
   statusDot.classList.toggle("live", connected);
+  let voiceState = "idle";
+  if (connected && text === "Assistant speaking") {
+    voiceState = "speaking";
+  } else if (connected && text === "Listening to you") {
+    voiceState = "listening";
+  } else if (connected) {
+    voiceState = "ready";
+  }
+  orbStage.dataset.voiceState = voiceState;
 }
 
 function updateLiveState() {
@@ -470,7 +569,11 @@ async function connect() {
   setConnectionButtons({ connecting: true });
 
   socket.onopen = async () => {
-    socket.send(JSON.stringify({ type: "config", voice: voiceSelect.value }));
+    socket.send(JSON.stringify({
+      type: "config",
+      voice: voiceSelect.value,
+      user_context: getSessionUserContext()
+    }));
     setConnectionButtons({ connected: true });
     setStatus("Allow microphone access...", true);
     addEvent(events, "Connected. Waiting for microphone permission.");
@@ -570,6 +673,26 @@ connectBtn.addEventListener("click", connect);
 disconnectBtn.addEventListener("click", disconnect);
 startCameraBtn.addEventListener("click", startCamera);
 stopCameraBtn.addEventListener("click", () => stopCamera());
+for (const button of navButtons) {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    showView(button.dataset.nav);
+  });
+}
+for (const button of newRequestButtons) {
+  button.addEventListener("click", () => {
+    showView("assistant");
+    window.setTimeout(() => textInput.focus(), 100);
+  });
+}
+refreshTasksBtn.addEventListener("click", () => {
+  if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
+    addEvent(events, "Start a conversation before refreshing tasks.");
+    showView("assistant");
+    return;
+  }
+  socket.send(JSON.stringify({ type: "text", text: "List my open tasks." }));
+});
 sendTextBtn.addEventListener("click", () => {
   if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
     return;

@@ -3,68 +3,201 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Realtime Voice Task Manager</title>
-    <link rel="stylesheet" href="/static/css/styles.css?v=3">
+    <meta name="theme-color" content="#f7f9fb">
+    <title>Aura | Voice Task Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css?v=7">
   </head>
   <body>
-    <main>
-      <h1>Realtime voice task assistant</h1>
-      <p class="lead">
-        Talk naturally, manage tasks, search the web, or turn on the camera and ask what it sees.
-      </p>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" data-nav="assistant" aria-label="Aura home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z"/><path d="M19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></svg>
+          </span>
+          <span><strong>Aura</strong><small>Ethereal intelligence</small></span>
+        </a>
 
-      <div class="grid">
-        <section class="panel">
-          <div class="toolbar row">
-            <span class="meta"><span id="statusDot" class="status-dot"></span><span id="statusText">Disconnected</span></span>
-            <select id="voiceSelect">
-              <option>Kore</option>
-              <option>Puck</option>
-              <option>Aoede</option>
-              <option>Charon</option>
-              <option>Fenrir</option>
-              <option>Leda</option>
-              <option>Orus</option>
-              <option>Zephyr</option>
-            </select>
-            <button id="connectBtn" class="primary">Start conversation</button>
-            <button id="disconnectBtn" disabled>Stop</button>
+        <button class="new-request" type="button" data-new-request>
+          <span aria-hidden="true">+</span> New request
+        </button>
+
+        <nav class="side-nav" aria-label="Primary navigation">
+          <button class="nav-item active" type="button" data-nav="assistant">
+            <span class="nav-icon">◉</span><span>Assistant</span>
+          </button>
+          <button class="nav-item" type="button" data-nav="tasks">
+            <span class="nav-icon">✓</span><span>Tasks</span>
+          </button>
+          <button class="nav-item" type="button" data-nav="history">
+            <span class="nav-icon">↺</span><span>History</span>
+          </button>
+          <button class="nav-item" type="button" data-nav="settings">
+            <span class="nav-icon">⚙</span><span>Settings</span>
+          </button>
+        </nav>
+
+        <div class="profile-card">
+          <div class="avatar">A</div>
+          <span><strong>Local assistant</strong><small>Private workspace</small></span>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="mobile-brand">
+            <span class="brand-mark small" aria-hidden="true">✦</span>
           </div>
-
-          <div class="camera-card">
-            <div class="row camera-heading">
-              <h2>Camera vision</h2>
-              <span id="cameraStatus" class="meta">Camera off</span>
-            </div>
-            <div id="cameraStage" class="camera-stage">
-              <video id="cameraPreview" autoplay muted playsinline></video>
-              <div class="camera-placeholder">Start the camera, hold up an object, then ask “What is this?”</div>
-            </div>
-            <canvas id="cameraCanvas" hidden></canvas>
-            <div class="row">
-              <button id="startCameraBtn" disabled>Start camera</button>
-              <button id="stopCameraBtn" disabled>Stop camera</button>
-            </div>
+          <div>
+            <p class="breadcrumb">Personal intelligence</p>
+            <h1 id="viewTitle">Aura Assistant</h1>
           </div>
-
-          <div id="conversation" class="conversation"></div>
-
-          <div class="text-entry">
-            <input id="textInput" type="text" placeholder="Type if you prefer" disabled>
-            <button id="sendTextBtn" disabled>Send</button>
+          <div class="topbar-actions">
+            <span class="system-badge"><i></i> Local system</span>
+            <span class="status-pill">
+              <i id="statusDot"></i><span id="statusText">Disconnected</span>
+            </span>
           </div>
-        </section>
+        </header>
 
-        <section class="panel">
-          <h2>Task state</h2>
-          <div id="tasks" class="tasks"></div>
+        <main class="content">
+          <section class="view active" data-view="assistant">
+            <div class="assistant-hero glass-panel">
+              <div class="hero-copy">
+                <span class="eyebrow">Gemini Live assistant</span>
+                <h2>What can I help you accomplish?</h2>
+                <p>Talk naturally, manage your day, search the web, or share visual context through your camera.</p>
+              </div>
 
-          <h2>Live events</h2>
-          <div id="events" class="events"></div>
-        </section>
+              <div class="orb-stage">
+                <span class="orb-halo halo-one"></span>
+                <span class="orb-halo halo-two"></span>
+                <button id="connectBtn" class="voice-orb" type="button" aria-label="Start conversation">
+                  <span class="orb-core">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M18 11v1a6 6 0 0 1-12 0v-1M12 18v4M8 22h8"/></svg>
+                  </span>
+                  <span>Start conversation</span>
+                </button>
+                <div class="voice-wave" aria-hidden="true">
+                  <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                </div>
+              </div>
+
+              <div class="session-actions">
+                <button id="disconnectBtn" class="button secondary" type="button" disabled>Stop session</button>
+                <button class="button ghost" type="button" data-nav="settings">Voice settings</button>
+              </div>
+            </div>
+
+            <div class="assistant-grid">
+              <section class="glass-card conversation-card">
+                <div class="card-heading">
+                  <div><span class="eyebrow">Conversation</span><h3>Live exchange</h3></div>
+                  <span class="soft-badge">Realtime</span>
+                </div>
+                <div id="conversation" class="conversation" aria-live="polite">
+                  <div class="welcome-message">
+                    <span>✦</span>
+                    <div><strong>Aura is ready when you are.</strong><p>Start a voice session or type below.</p></div>
+                  </div>
+                </div>
+                <div class="text-entry">
+                  <input id="textInput" type="text" placeholder="Ask Aura anything..." disabled>
+                  <button id="sendTextBtn" type="button" disabled aria-label="Send message">↑</button>
+                </div>
+              </section>
+
+              <section class="glass-card camera-card">
+                <div class="card-heading">
+                  <div><span class="eyebrow">Visual context</span><h3>Camera vision</h3></div>
+                  <span id="cameraStatus" class="soft-badge muted">Camera off</span>
+                </div>
+                <div id="cameraStage" class="camera-stage">
+                  <video id="cameraPreview" autoplay muted playsinline></video>
+                  <div class="camera-placeholder">
+                    <span class="camera-glyph">⌾</span>
+                    <strong>Show Aura what you see</strong>
+                    <p>Hold up an object, then ask “What is this?”</p>
+                  </div>
+                </div>
+                <canvas id="cameraCanvas" hidden></canvas>
+                <div class="camera-actions">
+                  <button id="startCameraBtn" class="button dark" type="button" disabled>Start camera</button>
+                  <button id="stopCameraBtn" class="button secondary" type="button" disabled>Stop</button>
+                </div>
+              </section>
+
+            </div>
+            <div id="events" hidden aria-live="polite"></div>
+          </section>
+
+          <section class="view" data-view="tasks" hidden>
+            <div class="page-intro">
+              <div><span class="eyebrow">Local workspace</span><h2>Task management</h2><p>Tasks created by voice or text are stored locally on this device.</p></div>
+              <div class="page-actions">
+                <button class="button secondary" type="button" data-nav="assistant">Ask Aura</button>
+                <button id="refreshTasksBtn" class="button dark" type="button">Refresh tasks</button>
+              </div>
+            </div>
+            <section class="glass-panel tasks-workspace">
+              <div class="task-summary">
+                <span>Today</span><strong>Your active tasks</strong>
+              </div>
+              <div id="tasks" class="tasks">
+                <div class="empty-state"><span>✓</span><strong>No tasks loaded yet</strong><p>Connect to Aura and click Refresh tasks.</p></div>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-view="history" hidden>
+            <div class="page-intro">
+              <div><span class="eyebrow">Session memory</span><h2>Interaction history</h2><p>Your current conversation remains available while the live session is connected.</p></div>
+            </div>
+            <section class="glass-panel history-panel">
+              <div class="timeline-entry">
+                <span class="timeline-dot">✦</span>
+                <div><small>Current session</small><h3>Realtime conversation context</h3><p>Return to Assistant to review transcripts and continue your conversation. Gemini retains context within the active session.</p></div>
+                <button class="button secondary" type="button" data-nav="assistant">Open conversation</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-view="settings" hidden>
+            <div class="page-intro">
+              <div><span class="eyebrow">Preferences</span><h2>Settings</h2><p>Configure the voice used for spoken Gemini responses.</p></div>
+            </div>
+            <div class="settings-grid">
+              <section class="glass-panel settings-card">
+                <div class="settings-icon">◖</div>
+                <div><h3>Assistant voice</h3><p>Select a Gemini Live voice before starting a session.</p></div>
+                <label class="field-label" for="voiceSelect">Voice model</label>
+                <select id="voiceSelect">
+                  <option>Kore</option><option>Puck</option><option>Aoede</option><option>Charon</option>
+                  <option>Fenrir</option><option>Leda</option><option>Orus</option><option>Zephyr</option>
+                </select>
+              </section>
+              <section class="glass-panel settings-card">
+                <div class="settings-icon">⌁</div>
+                <div><h3>Country and local time</h3><p>Only your country and calculated local clock time are shared with Aura. Your exact browser timezone stays local.</p></div>
+                <label class="field-label" for="countryInput">Country or region</label>
+                <input id="countryInput" type="text" maxlength="64" autocomplete="country-name" placeholder="e.g. Philippines">
+                <div id="localContext" class="detected-context">Detecting browser timezone...</div>
+                <div class="privacy-row"><span><i></i> Local server</span><strong>127.0.0.1</strong></div>
+              </section>
+            </div>
+          </section>
+        </main>
       </div>
-    </main>
 
-    <script type="module" src="/static/js/app.js?v=3"></script>
+      <nav class="bottom-nav" aria-label="Mobile navigation">
+        <button class="active" type="button" data-nav="assistant"><span>◉</span>Assistant</button>
+        <button type="button" data-nav="tasks"><span>✓</span>Tasks</button>
+        <button type="button" data-nav="history"><span>↺</span>History</button>
+        <button type="button" data-nav="settings"><span>⚙</span>Settings</button>
+      </nav>
+    </div>
+    <script type="module" src="/static/js/app.js?v=8"></script>
   </body>
 </html>

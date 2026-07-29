@@ -15,10 +15,14 @@ from google.genai import types
 
 from .config import DEFAULT_VOICE, LIVE_MODEL
 from .tools import call_tool, new_session_state
+from .user_context import build_user_context, user_context_instruction
 
 logger = logging.getLogger(__name__)
 
-def build_live_config(voice_name: str) -> types.LiveConnectConfig:
+def build_live_config(
+    voice_name: str,
+    user_context: dict[str, str] | None = None,
+) -> types.LiveConnectConfig:
     system_instruction = (
         "You are a realtime voice assistant for a task manager. "
         "Keep replies short, helpful, and spoken naturally. "
@@ -39,6 +43,8 @@ def build_live_config(voice_name: str) -> types.LiveConnectConfig:
         "Do not claim you searched unless you actually used the search_web tool. "
         "After each tool result, tell the user what happened and ask a short follow-up question when appropriate."
     )
+    if user_context:
+        system_instruction += user_context_instruction(user_context)
 
     tool_definitions = [
         {
@@ -235,7 +241,13 @@ async def handle_live_socket(websocket: WebSocket) -> None:
         return
 
     voice_name = str(config_message.get("voice", DEFAULT_VOICE))
-    config = build_live_config(voice_name)
+    user_context = build_user_context(config_message.get("user_context"))
+    logger.info(
+        "Using client country context: region=%s country=%s",
+        user_context["region"] or "unknown",
+        user_context["country"] or "unknown",
+    )
+    config = build_live_config(voice_name, user_context)
     session_state = new_session_state()
 
     try:
