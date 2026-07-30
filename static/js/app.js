@@ -38,6 +38,7 @@ let playbackContext = null;
 let mediaStream = null;
 let mediaSource = null;
 let processor = null;
+let captureSink = null;
 let playbackCursor = 0;
 let assistantSpeakingUntil = 0;
 let microphoneBlockedByAssistant = false;
@@ -144,6 +145,7 @@ function showView(viewName) {
     button.classList.toggle("active", button.dataset.nav === target);
   }
   viewTitle.textContent = VIEW_TITLES[target];
+  void ensureAudioCaptureActive();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -398,6 +400,102 @@ function stopCamera(showEvent = true) {
   });
 }
 
+function processMicrophoneFrame(input) {
+  if (
+    !audioContext ||
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    disconnecting ||
+    microphoneBlockedByAssistant
+  ) {
+    return;
+  }
+
+  const rms = calculateRms(input);
+
+  if (!speaking) {
+    if (calibratedFrames < CALIBRATION_FRAMES) {
+      noiseFloor = Math.max(MIN_NOISE_FLOOR, (noiseFloor * calibratedFrames + rms) / (calibratedFrames + 1));
+      calibratedFrames += 1;
+    } else {
+      noiseFloor = Math.max(MIN_NOISE_FLOOR, noiseFloor * 0.98 + rms * 0.02);
+    }
+  }
+
+  const dynamicThreshold = Math.max(MIN_SPEECH_RMS, noiseFloor * SPEECH_RATIO);
+  const speechDetected = rms >= dynamicThreshold;
+
+  if (speechDetected) {
+    silenceFrames = 0;
+    speechFrames += 1;
+    if (!speaking && speechFrames >= REQUIRED_SPEECH_FRAMES) {
+      speaking = true;
+      pendingTailFrames = 0;
+      socket.send(JSON.stringify({ type: "activity_start" }));
+      addEvent(events, "Speech detected.");
+      updateLiveState();
+    }
+  } else {
+    speechFrames = 0;
+    if (speaking) {
+      silenceFrames += 1;
+      if (silenceFrames >= SILENCE_FRAME_LIMIT) {
+        speaking = false;
+        silenceFrames = 0;
+        pendingTailFrames = POST_SPEECH_CHUNKS;
+      }
+    }
+  }
+
+  const downsampled = downsampleBuffer(input, audioContext.sampleRate, 16000);
+  const pcm16 = floatTo16BitPCM(downsampled);
+  const base64Audio = int16ToBase64(pcm16);
+  preSpeechChunks.push(base64Audio);
+  if (preSpeechChunks.length > PRE_SPEECH_CHUNKS) {
+    preSpeechChunks.shift();
+  }
+
+  if (speaking) {
+    if (speechFrames === REQUIRED_SPEECH_FRAMES) {
+      for (const chunk of preSpeechChunks) {
+        sendAudioChunk(chunk);
+      }
+      preSpeechChunks = [];
+    }
+    sendAudioChunk(base64Audio);
+    return;
+  }
+
+  if (pendingTailFrames > 0) {
+    sendAudioChunk(base64Audio);
+    pendingTailFrames -= 1;
+    if (pendingTailFrames === 0) {
+      socket.send(JSON.stringify({ type: "activity_end" }));
+      addEvent(events, "Speech segment ended.");
+      preSpeechChunks = [];
+    }
+  }
+}
+
+async function ensureAudioCaptureActive() {
+  if (
+    !audioContext ||
+    audioContext.state === "closed" ||
+    !socket ||
+    socket.readyState !== WebSocket.OPEN
+  ) {
+    return;
+  }
+
+  if (audioContext.state === "suspended") {
+    try {
+      await audioContext.resume();
+    } catch (error) {
+      console.warn("Could not resume microphone capture.", error);
+    }
+  }
+}
+
 async function startMicrophone() {
   mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -408,7 +506,6 @@ async function startMicrophone() {
   });
   audioContext = new AudioContext();
   mediaSource = audioContext.createMediaStreamSource(mediaStream);
-  processor = audioContext.createScriptProcessor(2048, 1, 1);
   calibratedFrames = 0;
   noiseFloor = MIN_NOISE_FLOOR;
   speechFrames = 0;
@@ -417,84 +514,28 @@ async function startMicrophone() {
   pendingTailFrames = 0;
   preSpeechChunks = [];
 
-  processor.onaudioprocess = (event) => {
-    if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
-      return;
-    }
+  captureSink = audioContext.createGain();
+  captureSink.gain.value = 0;
+  captureSink.connect(audioContext.destination);
 
-    if (microphoneBlockedByAssistant) {
-      return;
-    }
-
-    const input = event.inputBuffer.getChannelData(0);
-    const rms = calculateRms(input);
-
-    if (!speaking) {
-      if (calibratedFrames < CALIBRATION_FRAMES) {
-        noiseFloor = Math.max(MIN_NOISE_FLOOR, (noiseFloor * calibratedFrames + rms) / (calibratedFrames + 1));
-        calibratedFrames += 1;
-      } else {
-        noiseFloor = Math.max(MIN_NOISE_FLOOR, noiseFloor * 0.98 + rms * 0.02);
-      }
-    }
-
-    const dynamicThreshold = Math.max(MIN_SPEECH_RMS, noiseFloor * SPEECH_RATIO);
-    const speechDetected = rms >= dynamicThreshold;
-
-    if (speechDetected) {
-      silenceFrames = 0;
-      speechFrames += 1;
-      if (!speaking && speechFrames >= REQUIRED_SPEECH_FRAMES) {
-        speaking = true;
-        pendingTailFrames = 0;
-        socket.send(JSON.stringify({ type: "activity_start" }));
-        addEvent(events, "Speech detected.");
-        updateLiveState();
-      }
-    } else {
-      speechFrames = 0;
-      if (speaking) {
-        silenceFrames += 1;
-        if (silenceFrames >= SILENCE_FRAME_LIMIT) {
-          speaking = false;
-          silenceFrames = 0;
-          pendingTailFrames = POST_SPEECH_CHUNKS;
-        }
-      }
-    }
-
-    const downsampled = downsampleBuffer(input, audioContext.sampleRate, 16000);
-    const pcm16 = floatTo16BitPCM(downsampled);
-    const base64Audio = int16ToBase64(pcm16);
-    preSpeechChunks.push(base64Audio);
-    if (preSpeechChunks.length > PRE_SPEECH_CHUNKS) {
-      preSpeechChunks.shift();
-    }
-
-    if (speaking) {
-      if (speechFrames === REQUIRED_SPEECH_FRAMES) {
-        for (const chunk of preSpeechChunks) {
-          sendAudioChunk(chunk);
-        }
-        preSpeechChunks = [];
-      }
-      sendAudioChunk(base64Audio);
-      return;
-    }
-
-    if (pendingTailFrames > 0) {
-      sendAudioChunk(base64Audio);
-      pendingTailFrames -= 1;
-      if (pendingTailFrames === 0) {
-        socket.send(JSON.stringify({ type: "activity_end" }));
-        addEvent(events, "Speech segment ended.");
-        preSpeechChunks = [];
-      }
-    }
-  };
+  if (audioContext.audioWorklet && typeof AudioWorkletNode === "function") {
+    await audioContext.audioWorklet.addModule(
+      "/static/js/microphone-processor.js?v=1"
+    );
+    processor = new AudioWorkletNode(audioContext, "microphone-capture");
+    processor.port.onmessage = (event) => {
+      processMicrophoneFrame(event.data);
+    };
+  } else {
+    processor = audioContext.createScriptProcessor(2048, 1, 1);
+    processor.onaudioprocess = (event) => {
+      processMicrophoneFrame(event.inputBuffer.getChannelData(0));
+    };
+  }
 
   mediaSource.connect(processor);
-  processor.connect(audioContext.destination);
+  processor.connect(captureSink);
+  await ensureAudioCaptureActive();
 }
 
 function stopMicrophone() {
@@ -512,8 +553,18 @@ function stopMicrophone() {
     assistantPlaybackTimer = null;
   }
   if (processor) {
+    if (processor.port) {
+      processor.port.onmessage = null;
+    }
+    if ("onaudioprocess" in processor) {
+      processor.onaudioprocess = null;
+    }
     processor.disconnect();
     processor = null;
+  }
+  if (captureSink) {
+    captureSink.disconnect();
+    captureSink = null;
   }
   if (mediaSource) {
     mediaSource.disconnect();
@@ -623,6 +674,12 @@ async function connect() {
       addEvent(events, "Response received; waiting for audio playback to finish.");
     } else if (payload.type === "error") {
       addEvent(events, `Error: ${payload.message}`);
+      addBubble(
+        conversation,
+        "assistant",
+        `The live conversation hit an error: ${payload.message}`
+      );
+      setStatus("Connection error", false);
     }
   };
 
@@ -711,4 +768,12 @@ textInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     sendTextBtn.click();
   }
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    void ensureAudioCaptureActive();
+  }
+});
+window.addEventListener("focus", () => {
+  void ensureAudioCaptureActive();
 });

@@ -6,8 +6,7 @@ import binascii
 import contextlib
 import logging
 import os
-import traceback
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 from google import genai
@@ -253,22 +252,39 @@ async def handle_live_socket(websocket: WebSocket) -> None:
     try:
         async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
             logger.info("Connected to Gemini Live model %s.", LIVE_MODEL)
-            receive_task = asyncio.create_task(forward_gemini_to_browser(session, websocket, session_state))
+            browser_task = asyncio.create_task(
+                forward_browser_to_gemini(session, websocket),
+                name="browser-to-gemini",
+            )
+            receive_task = asyncio.create_task(
+                forward_gemini_to_browser(session, websocket, session_state),
+                name="gemini-to-browser",
+            )
+            tasks = {browser_task, receive_task}
             try:
-                await forward_browser_to_gemini(session, websocket)
+                done, _pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    await task
+                if receive_task in done:
+                    raise RuntimeError("Gemini response stream ended unexpectedly.")
             finally:
-                receive_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await receive_task
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                for task in tasks:
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
     except WebSocketDisconnect:
         logger.info("Browser WebSocket disconnected.")
         return
     except Exception as exc:
-        logger.error("Live session failed: %s", exc)
-        logger.debug(traceback.format_exc())
-        try:
+        logger.exception("Live session failed: %s", exc)
+        with contextlib.suppress(Exception):
             await websocket.send_json({"type": "error", "message": str(exc)})
-        finally:
+        with contextlib.suppress(Exception):
             await websocket.close()
 
 
@@ -371,9 +387,26 @@ async def handle_gemini_message(
 ) -> None:
     if message.tool_call:
         logger.info("Gemini requested tool call(s).")
-        responses = []
+        responses: list[types.FunctionResponse] = []
         for function_call in message.tool_call.function_calls:
-            tool_result = call_tool(function_call.name, function_call.args or {}, session_state)
+            call_id = getattr(function_call, "id", None)
+            if not call_id:
+                raise RuntimeError(
+                    f"Gemini did not provide an ID for the {function_call.name} tool call."
+                )
+
+            try:
+                tool_result = call_tool(
+                    function_call.name,
+                    function_call.args or {},
+                    session_state,
+                )
+            except Exception:
+                logger.exception("Tool %s failed.", function_call.name)
+                tool_result = {
+                    "ok": False,
+                    "message": f"The {function_call.name} action could not be completed.",
+                }
             session_state["last_tool_name"] = function_call.name
             session_state["last_tool_result"] = tool_result
             if function_call.name == "search_web" and tool_result.get("ok"):
@@ -411,13 +444,13 @@ async def handle_gemini_message(
                     "kind": "search_result",
                     "result": tool_result.get("result"),
                 }
-            response_payload: Dict[str, Any] = {
-                "name": function_call.name,
-                "response": tool_result,
-            }
-            if getattr(function_call, "id", None):
-                response_payload["id"] = function_call.id
-            responses.append(response_payload)
+            responses.append(
+                types.FunctionResponse(
+                    id=call_id,
+                    name=function_call.name,
+                    response=tool_result,
+                )
+            )
             await websocket.send_json(
                 {
                     "type": "tool_result",
