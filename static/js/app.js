@@ -5,7 +5,9 @@ import {
   floatTo16BitPCM,
   int16ToBase64
 } from "./audio-utils.js";
-import { addBubble, addEvent, renderToolResult } from "./ui.js?v=5";
+import { addBubble, addEvent, renderTaskHistory, renderToolResult } from "./ui.js?v=10";
+import { createAlarmManager } from "./alarm-manager.js?v=1";
+import { populateCountryOptions, selectedCountryName } from "./country-options.js?v=1";
 
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
@@ -23,14 +25,34 @@ const cameraCanvas = document.getElementById("cameraCanvas");
 const orbStage = document.querySelector(".orb-stage");
 const conversation = document.getElementById("conversation");
 const tasks = document.getElementById("tasks");
+const taskHistory = document.getElementById("taskHistory");
+const searchHistory = document.getElementById("searchHistory");
 const events = document.getElementById("events");
 const viewTitle = document.getElementById("viewTitle");
 const navButtons = [...document.querySelectorAll("[data-nav]")];
 const viewPanels = [...document.querySelectorAll("[data-view]")];
 const newRequestButtons = [...document.querySelectorAll("[data-new-request]")];
 const refreshTasksBtn = document.getElementById("refreshTasksBtn");
+const clearSearchHistoryBtn = document.getElementById("clearSearchHistoryBtn");
+const sidebar = document.getElementById("sidebar");
+const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+const closeSidebarBtn = document.getElementById("closeSidebarBtn");
 const countryInput = document.getElementById("countryInput");
 const localContext = document.getElementById("localContext");
+const alarmManager = createAlarmManager({
+  onEvent: (message) => addEvent(events, message)
+});
+const SEARCH_HISTORY_KEY = "aura-search-history";
+const SEARCH_HISTORY_LIMIT = 20;
+const TASK_MUTATION_TOOLS = [
+  "add_task",
+  "complete_task",
+  "complete_listed_task",
+  "delete_task",
+  "delete_listed_task",
+  "clear_completed"
+];
 
 let socket = null;
 let audioContext = null;
@@ -86,33 +108,29 @@ function getBrowserDisplayContext() {
   return {
     timezone,
     locale,
-    region,
-    country: countryInput.value.trim()
+    region
   };
 }
 
 function getSessionUserContext() {
   const context = getBrowserDisplayContext();
   return {
-    region: context.region,
-    country: countryInput.value.trim(),
+    region: countryInput.value || context.region,
+    country: selectedCountryName(countryInput),
     utc_offset_minutes: -new Date().getTimezoneOffset()
   };
 }
 
+function updateLocalContext() {
+  const context = getBrowserDisplayContext();
+  const country = selectedCountryName(countryInput) || "System default";
+  localContext.textContent =
+    `Selected country: ${country} · Browser timezone: ${context.timezone} · Locale: ${context.locale}`;
+}
+
 function initializeUserContext() {
   const context = getBrowserDisplayContext();
-  let inferredCountry = context.region;
-
-  if (context.region && typeof Intl.DisplayNames === "function") {
-    try {
-      inferredCountry = new Intl.DisplayNames([context.locale], {
-        type: "region"
-      }).of(context.region);
-    } catch {
-      inferredCountry = context.region;
-    }
-  }
+  populateCountryOptions(countryInput, context.locale);
 
   let savedCountry = "";
   try {
@@ -120,19 +138,120 @@ function initializeUserContext() {
   } catch {
     savedCountry = "";
   }
-  countryInput.value = savedCountry || inferredCountry || "";
-  localContext.textContent =
-    `Timezone: ${context.timezone} · Locale: ${context.locale}`;
+
+  const savedCode = savedCountry.toUpperCase();
+  if (savedCode.length === 2 && countryInput.querySelector(`option[value="${savedCode}"]`)) {
+    countryInput.value = savedCode;
+  } else if (savedCountry) {
+    const legacyOption = [...countryInput.options].find(
+      (option) => option.textContent === savedCountry
+    );
+    countryInput.value = legacyOption?.value || context.region || "";
+  } else {
+    countryInput.value = context.region || "";
+  }
+
+  updateLocalContext();
 }
 
 initializeUserContext();
 countryInput.addEventListener("change", () => {
   try {
-    window.localStorage.setItem("aura-country", countryInput.value.trim());
+    window.localStorage.setItem("aura-country", countryInput.value);
   } catch {
     // Location context still works for this session when storage is unavailable.
   }
+  updateLocalContext();
 });
+
+function showEmptySearchHistory() {
+  const empty = document.createElement("div");
+  empty.className = "search-history-empty";
+  const label = document.createElement("span");
+  label.textContent = "Search";
+  const title = document.createElement("strong");
+  title.textContent = "No searches yet";
+  const description = document.createElement("p");
+  description.textContent = "Ask Aura to search the web and the results will appear here.";
+  empty.append(label, title, description);
+  searchHistory.replaceChildren(empty);
+}
+
+function readSearchHistory() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_KEY) || "[]");
+    return Array.isArray(stored) ? stored.slice(0, SEARCH_HISTORY_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function restoreSearchHistory() {
+  const stored = readSearchHistory();
+  if (!stored.length) {
+    showEmptySearchHistory();
+    return;
+  }
+  searchHistory.replaceChildren();
+  for (const item of [...stored].reverse()) {
+    renderToolResult(searchHistory, item);
+  }
+}
+
+function recordSearchResult(payload) {
+  const entry = {
+    name: "search_web",
+    result: payload.result,
+    recorded_at: new Date().toISOString()
+  };
+  renderToolResult(searchHistory, entry);
+  try {
+    const stored = readSearchHistory();
+    stored.unshift(entry);
+    window.localStorage.setItem(
+      SEARCH_HISTORY_KEY,
+      JSON.stringify(stored.slice(0, SEARCH_HISTORY_LIMIT))
+    );
+  } catch {
+    // The current session still displays history if browser storage is unavailable.
+  }
+}
+
+restoreSearchHistory();
+
+async function refreshTaskListFromApi() {
+  try {
+    const response = await fetch("/api/tasks", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Could not load tasks.");
+    }
+    const allTasks = await response.json();
+    renderToolResult(tasks, {
+      name: "list_tasks",
+      result: {
+        tasks: allTasks.filter((task) => task.status === "open")
+      }
+    });
+    renderTaskHistory(taskHistory, allTasks);
+  } catch (error) {
+    console.warn("Task list refresh failed.", error);
+    addEvent(events, error.message);
+  }
+}
+
+async function updateTaskFromChecklist(taskId, action) {
+  const method = action === "delete" ? "DELETE" : "POST";
+  const path = action === "delete"
+    ? `/api/tasks/${taskId}`
+    : `/api/tasks/${taskId}/complete`;
+  const response = await fetch(path, { method });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || "The task could not be updated.");
+  }
+  await refreshTaskListFromApi();
+  await alarmManager.refresh();
+}
 
 function showView(viewName) {
   const target = VIEW_TITLES[viewName] ? viewName : "assistant";
@@ -147,6 +266,19 @@ function showView(viewName) {
   viewTitle.textContent = VIEW_TITLES[target];
   void ensureAudioCaptureActive();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function setMobileSidebarOpen(open, restoreFocus = false) {
+  const shouldOpen = open && window.matchMedia("(max-width: 820px)").matches;
+  sidebar.classList.toggle("mobile-open", shouldOpen);
+  sidebarBackdrop.hidden = !shouldOpen;
+  document.body.classList.toggle("sidebar-open", shouldOpen);
+  mobileMenuBtn.setAttribute("aria-expanded", String(shouldOpen));
+  if (shouldOpen) {
+    closeSidebarBtn.focus();
+  } else if (restoreFocus) {
+    mobileMenuBtn.focus();
+  }
 }
 
 function setStatus(text, connected) {
@@ -191,6 +323,7 @@ function setConnectionButtons({ connecting = false, connected = false, stopping 
   connectBtn.disabled = connecting || connected || stopping;
   disconnectBtn.disabled = !connected && !stopping;
   voiceSelect.disabled = connecting || connected || stopping;
+  countryInput.disabled = connecting || connected || stopping;
   sendTextBtn.disabled = !connected || stopping;
   textInput.disabled = !connected || stopping;
   startCameraBtn.disabled = !connected || stopping || Boolean(cameraStream);
@@ -665,7 +798,16 @@ async function connect() {
       addEvent(events, `Assistant text: ${payload.text}`);
     } else if (payload.type === "tool_result") {
       addEvent(events, `Tool ${payload.name}: ${JSON.stringify(payload.result)}`);
-      renderToolResult(tasks, payload);
+      if (payload.name === "search_web") {
+        recordSearchResult(payload);
+      } else if (payload.name === "list_tasks") {
+        renderToolResult(tasks, payload);
+      } else if (TASK_MUTATION_TOOLS.includes(payload.name)) {
+        void refreshTaskListFromApi();
+      }
+      if (TASK_MUTATION_TOOLS.includes(payload.name)) {
+        void alarmManager.refresh();
+      }
     } else if (payload.type === "audio") {
       playPcm16(payload.data);
     } else if (payload.type === "turn_complete") {
@@ -734,21 +876,70 @@ for (const button of navButtons) {
   button.addEventListener("click", (event) => {
     event.preventDefault();
     showView(button.dataset.nav);
+    setMobileSidebarOpen(false);
   });
 }
 for (const button of newRequestButtons) {
   button.addEventListener("click", () => {
     showView("assistant");
+    setMobileSidebarOpen(false);
     window.setTimeout(() => textInput.focus(), 100);
   });
 }
-refreshTasksBtn.addEventListener("click", () => {
-  if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
-    addEvent(events, "Start a conversation before refreshing tasks.");
-    showView("assistant");
+mobileMenuBtn.addEventListener("click", () => setMobileSidebarOpen(true));
+closeSidebarBtn.addEventListener("click", () => setMobileSidebarOpen(false, true));
+sidebarBackdrop.addEventListener("click", () => setMobileSidebarOpen(false, true));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && sidebar.classList.contains("mobile-open")) {
+    setMobileSidebarOpen(false, true);
+  }
+});
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 820 && sidebar.classList.contains("mobile-open")) {
+    setMobileSidebarOpen(false);
+  }
+});
+refreshTasksBtn.addEventListener("click", () => void refreshTaskListFromApi());
+tasks.addEventListener("change", async (event) => {
+  const checkbox = event.target.closest('[data-task-action="complete"]');
+  if (!checkbox?.checked) {
     return;
   }
-  socket.send(JSON.stringify({ type: "text", text: "List my open tasks." }));
+  const row = checkbox.closest("[data-task-id]");
+  checkbox.disabled = true;
+  try {
+    await updateTaskFromChecklist(row.dataset.taskId, "complete");
+  } catch (error) {
+    checkbox.checked = false;
+    checkbox.disabled = false;
+    addEvent(events, error.message);
+  }
+});
+tasks.addEventListener("click", async (event) => {
+  const button = event.target.closest('[data-task-action="delete"]');
+  if (!button) {
+    return;
+  }
+  const row = button.closest("[data-task-id]");
+  const title = row.querySelector(".task-row-content strong")?.textContent || "this task";
+  if (!window.confirm(`Delete "${title}"?`)) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    await updateTaskFromChecklist(row.dataset.taskId, "delete");
+  } catch (error) {
+    button.disabled = false;
+    addEvent(events, error.message);
+  }
+});
+clearSearchHistoryBtn.addEventListener("click", () => {
+  try {
+    window.localStorage.removeItem(SEARCH_HISTORY_KEY);
+  } catch {
+    // The visible history can still be cleared without browser storage.
+  }
+  showEmptySearchHistory();
 });
 sendTextBtn.addEventListener("click", () => {
   if (!socket || socket.readyState !== WebSocket.OPEN || disconnecting) {
@@ -769,6 +960,8 @@ textInput.addEventListener("keydown", (event) => {
     sendTextBtn.click();
   }
 });
+alarmManager.start();
+void refreshTaskListFromApi();
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     void ensureAudioCaptureActive();

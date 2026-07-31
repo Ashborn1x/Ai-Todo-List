@@ -27,6 +27,11 @@ def build_live_config(
         "Keep replies short, helpful, and spoken naturally. "
         "When the user wants to add, list, complete, delete, or clear tasks, "
         "use the available tools instead of pretending. "
+        "When a task includes today, tomorrow, a weekday, a date, or a time, "
+        "resolve it against the provided local clock and pass the exact value in "
+        "scheduled_for. Use YYYY-MM-DD when no time was given, or an ISO 8601 "
+        "date-time with the user's UTC offset when a time was given. Keep the task "
+        "title free of scheduling words and preserve those words in schedule_text. "
         "When the user refers to tasks with phrases like the first one, the second one, "
         "that task, or tell me more about the first one, use get_listed_task_details, "
         "complete_listed_task, or delete_listed_task when appropriate. "
@@ -50,14 +55,22 @@ def build_live_config(
             "function_declarations": [
                 {
                     "name": "add_task",
-                    "description": "Create a new task.",
+                    "description": "Create a task, optionally scheduled for an exact local date or time.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
                             "title": {
                                 "type": "STRING",
-                                "description": "The task title to create.",
-                            }
+                                "description": "The task title without date or time phrases.",
+                            },
+                            "scheduled_for": {
+                                "type": "STRING",
+                                "description": "Resolved local schedule as YYYY-MM-DD, or ISO 8601 date-time including UTC offset. Omit when unscheduled.",
+                            },
+                            "schedule_text": {
+                                "type": "STRING",
+                                "description": "The user's original scheduling phrase, such as today or tomorrow at 10 PM.",
+                            },
                         },
                         "required": ["title"],
                     },

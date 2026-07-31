@@ -189,7 +189,18 @@ def call_tool(name: str, args: dict[str, Any], session_state: dict[str, Any]) ->
         title = str(args.get("title", "")).strip()
         if not title:
             return {"ok": False, "message": "Task title is required."}
-        task = add_task(title)
+        raw_scheduled_for = args.get("scheduled_for")
+        raw_schedule_text = args.get("schedule_text")
+        scheduled_for = (
+            str(raw_scheduled_for).strip() if raw_scheduled_for is not None else None
+        )
+        schedule_text = (
+            str(raw_schedule_text).strip() if raw_schedule_text is not None else None
+        )
+        try:
+            task = add_task(title, scheduled_for, schedule_text)
+        except ValueError as exc:
+            return {"ok": False, "message": str(exc)}
         return {"ok": True, "task": task}
 
     if name == "list_tasks":

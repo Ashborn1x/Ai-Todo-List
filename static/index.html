@@ -8,11 +8,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/styles.css?v=7">
+    <link rel="stylesheet" href="/static/css/styles.css?v=9">
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar">
+      <aside id="sidebar" class="sidebar">
+        <button id="closeSidebarBtn" class="sidebar-close" type="button" aria-label="Close navigation">×</button>
         <a class="brand" href="#" data-nav="assistant" aria-label="Aura home">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z"/><path d="M19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></svg>
@@ -44,9 +45,13 @@
           <span><strong>Local assistant</strong><small>Private workspace</small></span>
         </div>
       </aside>
+      <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Close navigation" hidden></button>
 
       <div class="workspace">
         <header class="topbar">
+          <button id="mobileMenuBtn" class="mobile-menu-button" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+            <span></span><span></span><span></span>
+          </button>
           <div class="mobile-brand">
             <span class="brand-mark small" aria-hidden="true">✦</span>
           </div>
@@ -153,15 +158,29 @@
 
           <section class="view" data-view="history" hidden>
             <div class="page-intro">
-              <div><span class="eyebrow">Session memory</span><h2>Interaction history</h2><p>Your current conversation remains available while the live session is connected.</p></div>
+              <div><span class="eyebrow">Local activity</span><h2>History</h2><p>Review completed tasks and web searches from your local assistant.</p></div>
             </div>
-            <section class="glass-panel history-panel">
-              <div class="timeline-entry">
-                <span class="timeline-dot">✦</span>
-                <div><small>Current session</small><h3>Realtime conversation context</h3><p>Return to Assistant to review transcripts and continue your conversation. Gemini retains context within the active session.</p></div>
-                <button class="button secondary" type="button" data-nav="assistant">Open conversation</button>
-              </div>
-            </section>
+            <div class="history-grid">
+              <section class="glass-panel history-section">
+                <div class="history-section-heading">
+                  <div><span class="eyebrow">Task activity</span><h3>Completed tasks</h3></div>
+                </div>
+                <div id="taskHistory" class="task-history"></div>
+              </section>
+              <section class="glass-panel history-section">
+                <div class="history-section-heading">
+                  <div><span class="eyebrow">Research activity</span><h3>Web searches</h3></div>
+                  <button id="clearSearchHistoryBtn" class="button secondary" type="button">Clear searches</button>
+                </div>
+                <div id="searchHistory" class="search-history">
+                  <div class="search-history-empty">
+                    <span>Search</span>
+                    <strong>No searches yet</strong>
+                    <p>Ask Aura to search the web and the results will appear here.</p>
+                  </div>
+                </div>
+              </section>
+            </div>
           </section>
 
           <section class="view" data-view="settings" hidden>
@@ -182,13 +201,48 @@
                 <div class="settings-icon">⌁</div>
                 <div><h3>Country and local time</h3><p>Only your country and calculated local clock time are shared with Aura. Your exact browser timezone stays local.</p></div>
                 <label class="field-label" for="countryInput">Country or region</label>
-                <input id="countryInput" type="text" maxlength="64" autocomplete="country-name" placeholder="e.g. Philippines">
+                <select id="countryInput" autocomplete="country">
+                  <option value="">Detecting system country...</option>
+                </select>
                 <div id="localContext" class="detected-context">Detecting browser timezone...</div>
                 <div class="privacy-row"><span><i></i> Local server</span><strong>127.0.0.1</strong></div>
+              </section>
+              <section class="glass-panel settings-card">
+                <div class="settings-icon">!</div>
+                <div><h3>Task alarms</h3><p>Enable audible alarms and optional browser notifications for tasks that include an exact time.</p></div>
+                <button id="enableAlarmsBtn" class="button dark alarm-enable" type="button">Enable alarms</button>
+                <div id="alarmPermissionStatus" class="detected-context">Alarm scheduler is ready while this page is open.</div>
               </section>
             </div>
           </section>
         </main>
+      </div>
+
+      <div id="alarmModal" class="alarm-modal" role="alertdialog" aria-modal="true" aria-labelledby="alarmTitle" hidden>
+        <div class="alarm-backdrop"></div>
+        <section class="alarm-dialog">
+          <span class="alarm-signal" aria-hidden="true"><i></i></span>
+          <span class="eyebrow">Task reminder</span>
+          <h2 id="alarmTitle">Your task is due</h2>
+          <p id="alarmTaskTitle" class="alarm-task-title"></p>
+          <p id="alarmScheduledTime" class="alarm-scheduled-time"></p>
+          <div class="alarm-error" id="alarmError" role="status"></div>
+          <div class="snooze-presets" aria-label="Snooze duration">
+            <button type="button" data-snooze-minutes="5">5 min</button>
+            <button type="button" data-snooze-minutes="10">10 min</button>
+            <button type="button" data-snooze-minutes="15">15 min</button>
+            <button type="button" data-snooze-minutes="30">30 min</button>
+          </div>
+          <form id="customSnoozeForm" class="custom-snooze">
+            <label for="customSnoozeMinutes">Custom snooze</label>
+            <div>
+              <input id="customSnoozeMinutes" type="number" min="1" max="1440" value="10" required>
+              <span>minutes</span>
+              <button class="button dark" type="submit">Snooze</button>
+            </div>
+          </form>
+          <button id="dismissAlarmBtn" class="button secondary dismiss-alarm" type="button">Dismiss alarm</button>
+        </section>
       </div>
 
       <nav class="bottom-nav" aria-label="Mobile navigation">
@@ -198,6 +252,6 @@
         <button type="button" data-nav="settings"><span>⚙</span>Settings</button>
       </nav>
     </div>
-    <script type="module" src="/static/js/app.js?v=10"></script>
+    <script type="module" src="/static/js/app.js?v=18"></script>
   </body>
 </html>

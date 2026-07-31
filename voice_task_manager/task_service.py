@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from .config import DATA_FILE
@@ -32,7 +32,28 @@ def next_task_id(tasks: list[dict[str, Any]]) -> int:
     return max((task["id"] for task in tasks), default=0) + 1
 
 
-def add_task(title: str) -> dict[str, Any]:
+def normalize_scheduled_for(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+
+    cleaned = value.strip()
+    try:
+        if len(cleaned) == 10:
+            return date.fromisoformat(cleaned).isoformat()
+        parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            "The scheduled date must be an ISO date or date-time."
+        ) from exc
+
+    return parsed.isoformat(timespec="minutes")
+
+
+def add_task(
+    title: str,
+    scheduled_for: str | None = None,
+    schedule_text: str | None = None,
+) -> dict[str, Any]:
     tasks = load_tasks()
     task = {
         "id": next_task_id(tasks),
@@ -40,6 +61,10 @@ def add_task(title: str) -> dict[str, Any]:
         "status": "open",
         "created_at": now_iso(),
         "completed_at": None,
+        "scheduled_for": normalize_scheduled_for(scheduled_for),
+        "schedule_text": schedule_text.strip() if schedule_text else None,
+        "snoozed_until": None,
+        "alarm_dismissed_at": None,
     }
     tasks.append(task)
     save_tasks(tasks)
@@ -75,7 +100,15 @@ def list_tasks(limit: int = 8) -> dict[str, Any]:
     done_tasks = [task for task in tasks if task["status"] == "done"]
     visible = open_tasks[:limit]
     summary = [
-        {"id": task["id"], "title": task["title"], "status": task["status"]}
+        {
+            "id": task["id"],
+            "title": task["title"],
+            "status": task["status"],
+            "scheduled_for": task.get("scheduled_for"),
+            "schedule_text": task.get("schedule_text"),
+            "snoozed_until": task.get("snoozed_until"),
+            "alarm_dismissed_at": task.get("alarm_dismissed_at"),
+        }
         for task in visible
     ]
     return {
@@ -112,3 +145,38 @@ def clear_completed() -> dict[str, Any]:
     tasks = [task for task in tasks if task["status"] != "done"]
     save_tasks(tasks)
     return {"removed": before - len(tasks)}
+
+
+def get_all_tasks() -> list[dict[str, Any]]:
+    return load_tasks()
+
+
+def snooze_task_alarm(task_id: int, minutes: int) -> dict[str, Any]:
+    tasks = load_tasks()
+    task = next((item for item in tasks if item.get("id") == task_id), None)
+    if task is None:
+        return {"ok": False, "message": "Task not found."}
+    if task.get("status") != "open":
+        return {"ok": False, "message": "Only open tasks can be snoozed."}
+    if not task.get("scheduled_for") or len(str(task["scheduled_for"])) == 10:
+        return {"ok": False, "message": "This task does not have an alarm time."}
+
+    snoozed_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    task["snoozed_until"] = snoozed_until.isoformat(timespec="seconds")
+    task["alarm_dismissed_at"] = None
+    save_tasks(tasks)
+    return {"ok": True, "task": task}
+
+
+def dismiss_task_alarm(task_id: int) -> dict[str, Any]:
+    tasks = load_tasks()
+    task = next((item for item in tasks if item.get("id") == task_id), None)
+    if task is None:
+        return {"ok": False, "message": "Task not found."}
+
+    task["alarm_dismissed_at"] = datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    )
+    task["snoozed_until"] = None
+    save_tasks(tasks)
+    return {"ok": True, "task": task}

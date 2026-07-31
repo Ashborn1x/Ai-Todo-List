@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 REGION_PATTERN = re.compile(r"^[A-Z]{2}$")
-COUNTRY_PATTERN = re.compile(r"^[\w .,'()-]{1,64}$")
+COUNTRY_PATTERN = re.compile(r"^[\w .,'’&()/-]{1,64}$")
 
 
 def build_user_context(raw_context: Any) -> dict[str, str]:
@@ -31,6 +31,7 @@ def build_user_context(raw_context: Any) -> dict[str, str]:
         "region": region,
         "country": country,
         "local_datetime": local_now.strftime("%A, %B %d, %Y at %I:%M:%S %p"),
+        "local_iso_datetime": local_now.isoformat(timespec="seconds"),
     }
 
 
@@ -46,6 +47,7 @@ def user_context_instruction(context: dict[str, str]) -> str:
         " User country context: "
         f"{location}. "
         f"The user's local date and time at session start is {context['local_datetime']}. "
+        f"Its exact ISO 8601 value is {context['local_iso_datetime']}. "
         "Interpret today, tomorrow, weekdays, and spoken times using this local clock. "
         "Use only the provided country-level location. Do not infer or claim to know "
         "the user's city, address, coordinates, or other precise location."
