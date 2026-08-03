@@ -31,8 +31,11 @@ task management, conversation context, and web-search fallback.
 ## Run
 
 ```powershell
-python realtime_voice_server.py
+uvicorn voice_task_manager.app:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+The `realtime_voice_server.py` file remains available only as a compatibility
+launcher. Direct Uvicorn execution is the primary way to run the app.
 
 Open `http://127.0.0.1:8000`, click **Start conversation**, and allow
 microphone access. Camera access is separate and remains off until you click
